@@ -56,4 +56,4 @@ def classify_path(path: str, is_directory: bool = False) -> tuple[str, str]:
     if p.suffix.casefold() in ARCHIVE_EXTENSIONS:
         return "REVIEW - ARCHIVE / INSTALLER / BACKUP / LOG", "May be redundant or re-downloadable, but verify contents and backup value before any future cleanup."
 
-    return "REVIEW - PURPOSE UNKNOWN", "DiskSense cannot safely infer whether this item is disposable from its path alone."
+    return "REVIEW - PURPOSE UNKNOWN", "DietDisk cannot safely infer whether this item is disposable from its path alone."

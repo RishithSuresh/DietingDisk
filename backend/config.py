@@ -1,13 +1,13 @@
-"""Configuration and application-data paths for DiskSense."""
+"""Configuration and application-data paths for DietDisk."""
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
-APP_NAME = "DiskSense"
-APP_DATA_DIR = Path(os.environ.get("DISKSENSE_DATA_DIR", str(Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP_NAME)))
-# DISKSENSE_DATA_DIR is the full data directory override, useful when the system drive is low on space.
-DATABASE_PATH = APP_DATA_DIR / "disksense.sqlite3"
+APP_NAME = "DietDisk"
+APP_DATA_DIR = Path(os.environ.get("DietDisk_DATA_DIR", str(Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP_NAME)))
+# DietDisk_DATA_DIR is the full data directory override, useful when the system drive is low on space.
+DATABASE_PATH = APP_DATA_DIR / "DietDisk.sqlite3"
 REPORTS_DIR = APP_DATA_DIR / "reports"
 
 # Metadata/system locations that are deliberately not traversed. They are recorded

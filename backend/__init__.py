@@ -1,1 +1,1 @@
-"""DiskSense backend package."""
+"""DietDisk backend package."""

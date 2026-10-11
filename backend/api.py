@@ -1,4 +1,4 @@
-"""Local-only API consumed by the embedded DiskSense interface."""
+"""Local-only API consumed by the embedded DietDisk interface."""
 from __future__ import annotations
 import json
 import threading
@@ -15,7 +15,7 @@ from .config import APP_DATA_DIR, DATABASE_PATH, DEFAULT_DRIVES, REPORTS_DIR
 from .database import connect, create_scan
 from .scanner import scan_roots
 
-app = FastAPI(title="DiskSense Local API", docs_url=None, redoc_url=None)
+app = FastAPI(title="DietDisk Local API", docs_url=None, redoc_url=None)
 _FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 app.mount("/frontend", StaticFiles(directory=str(_FRONTEND_DIR)), name="frontend")
 
@@ -67,7 +67,7 @@ def _valid_roots(roots: list[str]) -> list[str]:
 
 @app.get("/api/health")
 def health():
-    return {"app": "DiskSense", "status": "ok", "mode": "read-only inventory"}
+    return {"app": "DietDisk", "status": "ok", "mode": "read-only inventory"}
 
 
 @app.get("/api/drives")
@@ -234,7 +234,7 @@ def export_csv(scan_id: int | None = None):
                 raise HTTPException(status_code=404, detail="No scan available to export")
             scan_id = int(row[0])
         REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-        out = REPORTS_DIR / f"disksense_scan_{scan_id}_files.csv"
+        out = REPORTS_DIR / f"DietDisk_scan_{scan_id}_files.csv"
         rows = conn.execute("SELECT path,parent_path,name,extension,size_bytes,modified_at,classification,reason FROM files WHERE scan_id=? ORDER BY size_bytes DESC", (scan_id,)).fetchall()
         with out.open("w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
