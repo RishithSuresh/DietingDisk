@@ -1,4 +1,4 @@
-"""Launch the DiskSense embedded web UI and local API on Windows."""
+"""Launch the DietingDisk embedded web UI and local API on Windows."""
 from __future__ import annotations
 import socket
 import threading
@@ -32,9 +32,9 @@ def main() -> None:
         except Exception:
             time.sleep(0.1)
     else:
-        raise RuntimeError("DiskSense local API did not start. Check your Python environment.")
+        raise RuntimeError("DietingDisk local API did not start. Check your Python environment.")
     try:
-        webview.create_window("DiskSense | Windows Storage Auditor", url, width=1360, height=900,
+        webview.create_window("DietingDisk | Windows Storage Auditor", url, width=1360, height=900,
                               min_size=(980, 680), background_color="#f4f7f2")
         webview.start(debug=False)
     finally:

@@ -1,4 +1,4 @@
-"""Local-only API consumed by the embedded DietDisk interface."""
+"""Local-only API consumed by the embedded DietingDisk interface."""
 from __future__ import annotations
 import json
 import threading
@@ -13,9 +13,10 @@ from pydantic import BaseModel, Field
 
 from .config import APP_DATA_DIR, DATABASE_PATH, DEFAULT_DRIVES, REPORTS_DIR
 from .database import connect, create_scan
+from .classifier import classify_path
 from .scanner import scan_roots
 
-app = FastAPI(title="DietDisk Local API", docs_url=None, redoc_url=None)
+app = FastAPI(title="DietingDisk Local API", docs_url=None, redoc_url=None)
 _FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 app.mount("/frontend", StaticFiles(directory=str(_FRONTEND_DIR)), name="frontend")
 
@@ -67,7 +68,7 @@ def _valid_roots(roots: list[str]) -> list[str]:
 
 @app.get("/api/health")
 def health():
-    return {"app": "DietDisk", "status": "ok", "mode": "read-only inventory"}
+    return {"app": "DietingDisk", "status": "ok", "mode": "read-only inventory"}
 
 
 @app.get("/api/drives")
@@ -221,6 +222,136 @@ def summary(scan_id: int | None = None):
         conn.close()
 
 
+@app.get("/api/analytics")
+def analytics(scan_id: int | None = None):
+    """Storage analytics based on persisted inventory rows; no drive rescan required."""
+    conn = connect()
+    try:
+        if scan_id is None:
+            row = conn.execute("SELECT id FROM scans WHERE status IN ('completed','cancelled','failed') ORDER BY id DESC LIMIT 1").fetchone()
+            if not row:
+                return {"scan": None, "extensions": [], "classifications": [], "largest_folders": []}
+            scan_id = int(row[0])
+        scan = conn.execute("SELECT * FROM scans WHERE id=?", (scan_id,)).fetchone()
+        if not scan:
+            raise HTTPException(status_code=404, detail="Scan not found")
+        extension_count = conn.execute("""
+            SELECT COUNT(DISTINCT CASE WHEN extension IS NULL OR extension='' THEN '[no extension]' ELSE LOWER(extension) END)
+            FROM files WHERE scan_id=?
+        """, (scan_id,)).fetchone()[0]
+        extensions = conn.execute("""
+            SELECT CASE WHEN extension IS NULL OR extension='' THEN '[no extension]' ELSE LOWER(extension) END AS extension,
+                   COUNT(*) AS file_count, COALESCE(SUM(size_bytes),0) AS bytes
+            FROM files WHERE scan_id=?
+            GROUP BY CASE WHEN extension IS NULL OR extension='' THEN '[no extension]' ELSE LOWER(extension) END
+            ORDER BY bytes DESC LIMIT 20
+        """, (scan_id,)).fetchall()
+        classifications = conn.execute("""
+            SELECT classification, COUNT(*) AS file_count, COALESCE(SUM(size_bytes),0) AS bytes
+            FROM files WHERE scan_id=? GROUP BY classification ORDER BY bytes DESC
+        """, (scan_id,)).fetchall()
+        largest_folders = conn.execute("""
+            SELECT path, name, total_bytes, direct_bytes, file_count, child_folder_count
+            FROM folders WHERE scan_id=? ORDER BY total_bytes DESC LIMIT 20
+        """, (scan_id,)).fetchall()
+        return {"scan": dict(scan), "extension_count": int(extension_count),
+                "extensions": [dict(r) for r in extensions],
+                "classifications": [dict(r) for r in classifications],
+                "largest_folders": [dict(r) for r in largest_folders]}
+    finally:
+        conn.close()
+
+
+@app.get("/api/treemap")
+def treemap(scan_id: int | None = None, path: str = "", limit: int = Query(120, ge=10, le=300)):
+    """Return one level of a scan tree so the UI never downloads the whole inventory."""
+    conn = connect()
+    try:
+        if scan_id is None:
+            row = conn.execute("SELECT id, roots_json FROM scans WHERE status IN ('completed','cancelled','failed') ORDER BY id DESC LIMIT 1").fetchone()
+        else:
+            row = conn.execute("SELECT id, roots_json FROM scans WHERE id=?", (scan_id,)).fetchone()
+        if not row:
+            return {"scan_id": None, "path": "", "items": [], "total_items": 0}
+        scan_id = int(row["id"])
+        roots = json.loads(row["roots_json"] or "[]")
+        current_path = path.strip()
+        if not current_path:
+            current_path = roots[0] if roots else ""
+        # Only browse paths belonging to a selected scan root; the endpoint reads database rows only.
+        norm = lambda value: str(value).replace("/", "\\").rstrip("\\").casefold()
+        allowed = [r for r in roots if norm(current_path) == norm(r) or norm(current_path).startswith(norm(r) + "\\")]
+        if not allowed:
+            raise HTTPException(status_code=400, detail="Path is outside the selected scan roots.")
+        folder_rows = conn.execute("""
+            SELECT path, name, total_bytes AS size_bytes, file_count, child_folder_count
+            FROM folders
+            WHERE scan_id=? AND parent_path=? COLLATE NOCASE AND path<>? COLLATE NOCASE
+            ORDER BY total_bytes DESC LIMIT ?
+        """, (scan_id, current_path, current_path, limit)).fetchall()
+        file_rows = conn.execute("""
+            SELECT path, name, size_bytes, classification, reason
+            FROM files WHERE scan_id=? AND parent_path=? COLLATE NOCASE
+            ORDER BY size_bytes DESC LIMIT ?
+        """, (scan_id, current_path, limit)).fetchall()
+        items = [{"type": "folder", **dict(r)} for r in folder_rows]
+        items += [{"type": "file", **dict(r)} for r in file_rows]
+        items.sort(key=lambda item: int(item.get("size_bytes") or 0), reverse=True)
+        total = len(items)
+        items = items[:limit]
+        return {"scan_id": scan_id, "path": current_path, "items": items, "total_items": total,
+                "truncated": total >= limit}
+    finally:
+        conn.close()
+
+
+@app.post("/api/classification/refresh")
+def refresh_classification(scan_id: int | None = None):
+    """Re-evaluate stored path labels with current rules. This changes only DietingDisk's database."""
+    # Updating hundreds of thousands of rows can temporarily grow SQLite's WAL.
+    # Fail safely when free space is too low rather than risking a full system drive.
+    db_size = DATABASE_PATH.stat().st_size if DATABASE_PATH.exists() else 0
+    free_bytes = psutil.disk_usage(str(APP_DATA_DIR)).free
+    required_bytes = min(max(int(db_size * 0.5), 512 * 1024 * 1024), 3 * 1024 * 1024 * 1024)
+    if free_bytes < required_bytes:
+        raise HTTPException(status_code=507, detail=(
+            f"Not enough free space to safely refresh all classifications. "
+            f"Available: {free_bytes / (1024**3):.2f} GB; estimated safety buffer: "
+            f"{required_bytes / (1024**3):.2f} GB. Analytics and treemap remain available."
+        ))
+    conn = connect()
+    try:
+        if scan_id is None:
+            row = conn.execute("SELECT id FROM scans WHERE status IN ('completed','cancelled','failed') ORDER BY id DESC LIMIT 1").fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="No scan available")
+            scan_id = int(row[0])
+        exists = conn.execute("SELECT id FROM scans WHERE id=?", (scan_id,)).fetchone()
+        if not exists:
+            raise HTTPException(status_code=404, detail="Scan not found")
+        updated = 0
+        last_id = 0
+        while True:
+            rows = conn.execute("SELECT id,path FROM files WHERE scan_id=? AND id>? ORDER BY id LIMIT 2000", (scan_id, last_id)).fetchall()
+            if not rows:
+                break
+            batch = []
+            for row in rows:
+                label, reason = classify_path(row["path"])
+                batch.append((label, reason, row["id"]))
+            conn.executemany("UPDATE files SET classification=?,reason=? WHERE id=?", batch)
+            conn.commit()
+            updated += len(batch)
+            last_id = int(rows[-1]["id"])
+        return {"scan_id": scan_id, "updated_files": updated,
+                "message": "Classifications refreshed. No files on scanned drives were modified."}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 @app.get("/api/export/csv")
 def export_csv(scan_id: int | None = None):
     """Export the latest scan's file inventory to a CSV in app-data reports."""
@@ -234,7 +365,7 @@ def export_csv(scan_id: int | None = None):
                 raise HTTPException(status_code=404, detail="No scan available to export")
             scan_id = int(row[0])
         REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-        out = REPORTS_DIR / f"DietDisk_scan_{scan_id}_files.csv"
+        out = REPORTS_DIR / f"DietingDisk_scan_{scan_id}_files.csv"
         rows = conn.execute("SELECT path,parent_path,name,extension,size_bytes,modified_at,classification,reason FROM files WHERE scan_id=? ORDER BY size_bytes DESC", (scan_id,)).fetchall()
         with out.open("w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)

@@ -1,88 +1,40 @@
-# DiskSense — Windows Storage Auditor
+# DietingDisk — Windows Storage Auditor
 
-DiskSense is a Windows desktop application with an embedded web-style interface for understanding disk usage. Phase 1 provides a read-only inventory of selected drive roots, explainable file labels, folder-size summaries, access-error/exclusion reporting, and CSV export.
+DietingDisk is a local desktop storage inventory and analysis tool built with Python, FastAPI, SQLite, and a web UI embedded using pywebview.
 
-## Safety boundary
+## Features in this build
 
-- Phase 1 has no delete, move, rename, or cleanup endpoint.
-- Scanned file contents are not opened; the scanner reads filesystem metadata only.
-- Symbolic links, junctions, and Windows-managed `$Recycle.Bin` / `System Volume Information` directories are skipped and logged as exclusions.
-- Access errors are recorded; therefore the inventory can be incomplete.
-- Classification is advisory. Even “cache” or “rebuild output” labels are not permission to delete.
-- The local API binds to `127.0.0.1` only. Do not change this to `0.0.0.0`.
+- Read-only drive inventory with scan issue reporting.
+- Storage analytics: file-extension breakdown, largest folders, and inventory totals.
+- Explainable conservative file classification with reasons and confidence wording.
+- Optional classification refresh that updates only DietingDisk's SQLite metadata, never files on scanned drives. It checks available disk space before starting because a large SQLite write-ahead log may temporarily need extra space.
+- Interactive one-level-at-a-time storage treemap with folder drill-down and file details.
+- Searchable file inventory and CSV export.
 
-## Requirements
+## Important safety notes
 
-- Windows 10/11
-- Python 3.10 or 3.11 recommended (the project uses syntax compatible with Python 3.10+)
-- A working Windows WebView2 Runtime for the embedded window (commonly already present on Windows 11)
+- No feature deletes, moves, or renames files on scanned drives.
+- Classification is advisory. `REVIEW` does not mean safe to delete.
+- Game assets, application data, databases, user documents, and model/dataset files are classified conservatively.
+- Parent folder sizes include descendants. Do not add nested folder totals together.
+- The treemap requests only one folder level at a time so the entire inventory is not loaded into the UI.
+- The app-data folder name in `backend/config.py` intentionally remains `DietDisk` to preserve the existing database location used by this installation. Do not rename that setting unless you deliberately migrate the existing database.
 
-## Setup (PowerShell)
+## Run on Windows
 
-```powershell
-cd D:\Programming
-mkdir DiskSense
-# If you extracted the project elsewhere, use that extracted path instead.
-cd .\DiskSense
-py -3.10 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-If PowerShell blocks activation, run this for the current terminal only, then activate again:
+Use the project's existing Python virtual environment if already configured. From the project folder:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\.venv\Scripts\Activate.ps1
-```
-
-If Python 3.10 is not registered with the Windows Python launcher, check installed versions with `py -0p` and substitute an installed Python 3.10 or 3.11 version. The project has also been written to avoid requiring a preview Python release. Avoid installing a preview Python release for this beginner project.
-
-## Run the application
-
-```powershell
+python -m pip install -r requirements.txt
 python main.py
 ```
 
-The app opens a desktop window. Select C: and D: and press **Start full scan**. The first full-drive scan may take a long time. Keep the app open until the scan finishes or cancellation completes.
-
-## Run tests
+Run tests:
 
 ```powershell
 python -m pytest -q
 ```
 
-## Data location
+## Database location
 
-By default, the SQLite database and CSV reports are stored under `%LOCALAPPDATA%\DiskSense\` (typically `C:\Users\<you>\AppData\Local\DiskSense\`). If C: is low on free space, set a data directory on a drive with more space before launching, for example:
-
-```powershell
-$env:DISKSENSE_DATA_DIR = "D:\DiskSenseData"
-python main.py
-```
-
-This override is the full data directory; the database and reports will be stored there. Keep this directory outside the source repository.
-
-## Phase 1 API endpoints
-
-- `GET /api/health`
-- `GET /api/drives`
-- `POST /api/scan/start`
-- `POST /api/scan/cancel`
-- `GET /api/scan/status`
-- `GET /api/scans`
-- `GET /api/summary`
-- `GET /api/files`
-- `GET /api/folders`
-- `GET /api/issues`
-- `GET /api/export/csv`
-
-## Current limitations
-
-- This is an initial Phase 1 implementation, not a certified cleanup tool.
-- A scan records accessible files and folders, not filesystem slack, NTFS metadata, or every hidden/protected allocation.
-- Directory size totals are computed from files the scanner can inventory; compare with Windows storage reports.
-- Drive root detection and WebView2 behavior should be tested on the target Windows PC.
-- File classification is heuristic and intentionally errs toward preserving data.
-- Duplicate detection, cleanup recommendations with approval, Recycle Bin integration, scheduled scans, and packaging are future phases.
+By default, the application uses `%LOCALAPPDATA%\DietDisk\DietDisk.sqlite3`. An environment variable named `DietDisk_DATA_DIR` can override the data directory. Keep the database and its SQLite `-wal` / `-shm` companion files together while the app is running.
